@@ -1,3 +1,219 @@
+const DEFAULT_CONFIG = {
+  storage: {
+    npointUrl: ''
+  },
+  branding: {
+    partnerName: '',
+    colors: {
+      primary: '',
+      secondary: '',
+      footer: ''
+    },
+    logo: '',
+    footerLogo: '',
+    banner: '',
+    loginBackground: ''
+  },
+  user: {
+    displayName: '',
+    agencyStatus: '',
+    welcomeName: '',
+    profile: {
+      firstName: '',
+      lastName1: '',
+      lastName2: '',
+      country: '',
+      province: '',
+      city: '',
+      postalCode: '',
+      taxId: '',
+      birthDate: '',
+      email: '',
+      phone: '',
+      agency: '',
+      gender: ''
+    }
+  },
+  rewards: {
+    agentPoints: 0,
+    rewardMinPoints: 0,
+    withholdingRatePct: 0
+  }
+};
+
+let appConfig = cloneData(DEFAULT_CONFIG);
+let storageConfig = { ...DEFAULT_CONFIG.storage };
+let editingUnlocked = false;
+let changingPassword = false;
+let suspendAutoSave = false;
+let currentBrandName = DEFAULT_CONFIG.branding.partnerName;
+let currentLogoValue = DEFAULT_CONFIG.branding.logo;
+let currentFooterLogoValue = DEFAULT_CONFIG.branding.footerLogo;
+let currentBannerValue = DEFAULT_CONFIG.branding.banner;
+let currentLoginBgValue = DEFAULT_CONFIG.branding.loginBackground;
+let mockAgentPoints = DEFAULT_CONFIG.rewards.agentPoints;
+let mockRewardMinPoints = DEFAULT_CONFIG.rewards.rewardMinPoints;
+let withholdingRatePct = DEFAULT_CONFIG.rewards.withholdingRatePct;
+let persistedState = { branding: null, user: null, rewards: null, passwordHash: '' };
+let editLauncherVisible = true;
+
+function cloneData(data) {
+  return JSON.parse(JSON.stringify(data));
+}
+
+function mergeConfig(base, override) {
+  if (!override || typeof override !== 'object') return cloneData(base);
+
+  const result = Array.isArray(base) ? [...base] : { ...base };
+  Object.keys(override).forEach((key) => {
+    const baseValue = result[key];
+    const overrideValue = override[key];
+
+    if (
+      baseValue &&
+      typeof baseValue === 'object' &&
+      !Array.isArray(baseValue) &&
+      overrideValue &&
+      typeof overrideValue === 'object' &&
+      !Array.isArray(overrideValue)
+    ) {
+      result[key] = mergeConfig(baseValue, overrideValue);
+      return;
+    }
+
+    result[key] = overrideValue;
+  });
+
+  return result;
+}
+
+async function loadAppConfig() {
+  try {
+    const response = await fetch('./config.json', { cache: 'no-store' });
+    if (!response.ok) throw new Error('No se pudo cargar config.json');
+    const config = await response.json();
+    return {
+      storage: mergeConfig(DEFAULT_CONFIG.storage, config.storage || {}),
+      branding: mergeConfig(DEFAULT_CONFIG.branding, normalizeBrandingConfig(config.branding || config.config || null) || {}),
+      user: mergeConfig(DEFAULT_CONFIG.user, config.user || {}),
+      rewards: mergeConfig(DEFAULT_CONFIG.rewards, config.rewards || {})
+    };
+  } catch (error) {
+    console.warn('No se pudo cargar config.json. Se usará la estructura base vacía.', error);
+    return cloneData(DEFAULT_CONFIG);
+  }
+}
+
+function hasRemotePersistence() {
+  return !!storageConfig.npointUrl;
+}
+
+function normalizeBrandingConfig(brandingConfig) {
+  if (!brandingConfig || typeof brandingConfig !== 'object') {
+    return null;
+  }
+
+  const normalizedColors = {
+    primary: brandingConfig.colors?.primary || brandingConfig.primaryColor || DEFAULT_CONFIG.branding.colors.primary,
+    secondary: brandingConfig.colors?.secondary || brandingConfig.secondaryColor || DEFAULT_CONFIG.branding.colors.secondary,
+    footer: brandingConfig.colors?.footer || brandingConfig.footerColor || DEFAULT_CONFIG.branding.colors.footer
+  };
+
+  return {
+    ...brandingConfig,
+    loginBackground: brandingConfig.loginBackground || brandingConfig.loginBg || '',
+    colors: normalizedColors
+  };
+}
+
+function serializeBrandingConfig(brandingConfig) {
+  const normalizedBranding = normalizeBrandingConfig(brandingConfig) || cloneData(DEFAULT_CONFIG.branding);
+
+  return {
+    partnerName: normalizedBranding.partnerName || DEFAULT_CONFIG.branding.partnerName,
+    primaryColor: normalizedBranding.colors.primary,
+    secondaryColor: normalizedBranding.colors.secondary,
+    footerColor: normalizedBranding.colors.footer,
+    logo: normalizedBranding.logo || '',
+    footerLogo: normalizedBranding.footerLogo || '',
+    banner: normalizedBranding.banner || '',
+    loginBg: normalizedBranding.loginBackground || ''
+  };
+}
+
+function mergeRemoteStateIntoAppConfig(remoteState) {
+  if (!remoteState) {
+    return appConfig;
+  }
+
+  return {
+    ...appConfig,
+    branding: mergeConfig(appConfig.branding, normalizeBrandingConfig(remoteState.branding) || {}),
+    user: mergeConfig(appConfig.user, remoteState.user || {}),
+    rewards: mergeConfig(appConfig.rewards, remoteState.rewards || {})
+  };
+}
+
+async function loadPersistedState() {
+  if (!hasRemotePersistence()) {
+    persistedState = { branding: null, user: null, rewards: null, passwordHash: '' };
+    return persistedState;
+  }
+
+  try {
+    const response = await fetch(storageConfig.npointUrl, { cache: 'no-store' });
+    if (!response.ok) throw new Error('No se pudo leer npoint');
+    const data = await response.json();
+    const remoteBranding = data.branding || data.config || null;
+    persistedState = {
+      branding: normalizeBrandingConfig(remoteBranding),
+      user: data.user || null,
+      rewards: data.rewards || null,
+      passwordHash: data.passwordHash || ''
+    };
+  } catch (error) {
+    console.warn('No se pudo leer npoint.', error);
+    persistedState = { branding: null, user: null, rewards: null, passwordHash: '' };
+  }
+
+  return persistedState;
+}
+
+async function savePersistedState(nextState) {
+  persistedState = { ...persistedState, ...nextState };
+
+  if (!hasRemotePersistence()) {
+    return false;
+  }
+
+  try {
+    const response = await fetch(storageConfig.npointUrl, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        config: serializeBrandingConfig(persistedState.branding),
+        user: persistedState.user,
+        rewards: persistedState.rewards,
+        passwordHash: persistedState.passwordHash
+      })
+    });
+    return response.ok;
+  } catch (error) {
+    console.warn('No se pudo guardar en npoint.', error);
+    return false;
+  }
+}
+
+function setInputValue(id, value) {
+  const element = document.getElementById(id);
+  if (element) element.value = value ?? '';
+}
+
+function setTextContent(id, value) {
+  const element = document.getElementById(id);
+  if (element) element.textContent = value ?? '';
+}
+
 // --- Banner slider ---
 const banners = document.querySelectorAll('.banner');
 const indicators = document.querySelectorAll('.indicator');
@@ -21,11 +237,6 @@ function fakeToast(msg) {
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => toast.classList.remove('show'), 3000);
 }
-
-// --- Panel edición ---
-// --- Control de acceso a la edición (contraseña hasheada, guardada en shared storage) ---
-let editingUnlocked = false;
-let changingPassword = false;
 
 async function hashText(text) {
   try {
@@ -53,43 +264,14 @@ async function requestEditAccess() {
   await openPasswordFlow();
 }
 
-// --- Almacenamiento remoto (npoint.io) — funciona en cualquier hosting, sin cuenta de Claude ---
-const NPOINT_URL = 'https://api.npoint.io/8014b200e950f03259ef';
-let binData = { config: {}, passwordHash: null };
-let binLoaded = false;
-
-async function loadBinData() {
-  try {
-    const res = await fetch(NPOINT_URL);
-    if (!res.ok) throw new Error('fetch failed');
-    const data = await res.json();
-    binData = { config: data.config || {}, passwordHash: data.passwordHash || null };
-  } catch (e) {
-    binData = { config: {}, passwordHash: null };
-  }
-  binLoaded = true;
-  return binData;
-}
-async function saveBinData() {
-  try {
-    const res = await fetch(NPOINT_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(binData)
-    });
-    return res.ok;
-  } catch (e) {
-    return false;
-  }
-}
-async function ensureBinLoaded() {
-  if (!binLoaded) await loadBinData();
-  return binData;
-}
-
 async function openPasswordFlow() {
-  await ensureBinLoaded();
-  const existingHash = binData.passwordHash;
+  const state = await loadPersistedState();
+  const existingHash = state.passwordHash;
+
+  if (!hasRemotePersistence()) {
+    fakeToast('Configura la URL de npoint en config.json para habilitar la edición compartida');
+    return;
+  }
 
   document.getElementById('passwordError').style.display = 'none';
   document.getElementById('newPasswordInput').value = '';
@@ -111,6 +293,11 @@ function closePasswordModal() {
   changingPassword = false;
 }
 
+function setEditLauncherVisibility(visible) {
+  editLauncherVisible = visible;
+  document.getElementById('mockToolbar').classList.toggle('toolbar-hidden', !visible);
+}
+
 async function handlePasswordSetup(event) {
   event.preventDefault();
   const pass = document.getElementById('newPasswordInput').value;
@@ -124,10 +311,9 @@ async function handlePasswordSetup(event) {
     return false;
   }
   const hash = await hashText(pass);
-  binData.passwordHash = hash;
-  const ok = await saveBinData();
+  const ok = await savePersistedState({ passwordHash: hash });
   if (!ok) {
-    fakeToast('No se pudo guardar la contraseña (revisa la conexión con npoint)');
+    fakeToast('No se pudo guardar la contraseña en npoint');
     return false;
   }
   editingUnlocked = true;
@@ -143,8 +329,8 @@ async function handlePasswordVerify(event) {
   event.preventDefault();
   const pass = document.getElementById('verifyPasswordInput').value;
   const hash = await hashText(pass);
-  await ensureBinLoaded();
-  const storedHash = binData.passwordHash;
+  const state = await loadPersistedState();
+  const storedHash = state.passwordHash;
 
   if (storedHash && hash === storedHash) {
     editingUnlocked = true;
@@ -166,8 +352,12 @@ async function handlePasswordVerify(event) {
 
 async function startPasswordChange() {
   changingPassword = true;
-  await ensureBinLoaded();
-  const existingHash = binData.passwordHash;
+  const state = await loadPersistedState();
+  const existingHash = state.passwordHash;
+  if (!hasRemotePersistence()) {
+    fakeToast('Configura la URL de npoint en config.json para habilitar la edición compartida');
+    return;
+  }
   document.getElementById('passwordError').style.display = 'none';
   document.getElementById('verifyPasswordInput').value = '';
   if (existingHash) {
@@ -186,13 +376,23 @@ function togglePanel() {
   const open = panel.classList.toggle('open');
   document.body.classList.toggle('panel-open', open);
   if (open) {
-    document.getElementById('mockToolbar').classList.add('toolbar-hidden');
+    setEditLauncherVisibility(false);
+    return;
   }
+
+  flushPendingSave();
+  setEditLauncherVisibility(false);
 }
 document.addEventListener('keydown', (e) => {
   if (e.ctrlKey && e.shiftKey && e.key.toLowerCase() === 'p') {
     e.preventDefault();
-    document.getElementById('mockToolbar').classList.toggle('toolbar-hidden');
+    const panel = document.getElementById('editPanel');
+    if (panel.classList.contains('open')) {
+      panel.classList.remove('open');
+      document.body.classList.remove('panel-open');
+      flushPendingSave();
+    }
+    setEditLauncherVisibility(!editLauncherVisible);
   }
   if (e.key === 'Escape') {
     const panel = document.getElementById('editPanel');
@@ -228,11 +428,6 @@ function updateColor(varNames, value) {
   names.forEach(n => document.documentElement.style.setProperty(n, value));
   scheduleSave();
 }
-let currentBrandName = 'Travelance';
-let currentLogoValue = '';
-let currentFooterLogoValue = '';
-let currentBannerValue = '';
-let currentLoginBgValue = '';
 
 function handleLogoFile(file) {
   if (!file) return;
@@ -312,9 +507,9 @@ function updateFooterLogo(input) {
   scheduleSave();
 }
 function updatePartnerName(name) {
-  currentBrandName = (name && name.trim()) ? name.trim() : 'Travelance';
+  currentBrandName = (name && name.trim()) ? name.trim() : '';
   document.querySelectorAll('.brand-name').forEach(el => el.textContent = currentBrandName);
-  document.title = `${currentBrandName} Rewards — Mockup`;
+  document.title = currentBrandName ? `${currentBrandName} Rewards — Mockup` : 'Rewards — Mockup';
   // si no hay logo personalizado, refresca el texto de fallback con la nueva marca
   if (!currentLogoValue) updateLogo('');
   if (!currentFooterLogoValue) updateFooterLogo('');
@@ -343,6 +538,69 @@ function handleLoginBgFile(file) {
   reader.onerror = () => { nameLabel.textContent = '⚠ No se pudo leer el archivo'; };
   reader.readAsDataURL(file);
 }
+
+function setSelectedGender(gender) {
+  document.getElementById('gender-h').checked = gender === 'H';
+  document.getElementById('gender-m').checked = gender === 'M';
+  document.getElementById('gender-otro').checked = gender === 'otro';
+}
+
+function applyUserConfig() {
+  const userConfig = mergeConfig(DEFAULT_CONFIG.user, appConfig.user || {});
+  const profile = userConfig.profile || {};
+
+  setTextContent('userChipName', userConfig.displayName);
+  setTextContent('userChipSub', userConfig.agencyStatus);
+  setInputValue('profileFirstName', profile.firstName);
+  setInputValue('profileLastName1', profile.lastName1);
+  setInputValue('profileLastName2', profile.lastName2);
+  setInputValue('profileCountry', profile.country);
+  setInputValue('profileProvince', profile.province);
+  setInputValue('profileCity', profile.city);
+  setInputValue('profilePostalCode', profile.postalCode);
+  setInputValue('profileTaxId', profile.taxId);
+  setInputValue('profileBirthDate', profile.birthDate);
+  setInputValue('profileEmail', profile.email);
+  setInputValue('profilePhone', profile.phone);
+  setInputValue('profileAgency', profile.agency);
+  setSelectedGender(profile.gender);
+}
+
+function applyBrandingConfig(brandingConfig) {
+  const branding = mergeConfig(DEFAULT_CONFIG.branding, normalizeBrandingConfig(brandingConfig) || {});
+
+  suspendAutoSave = true;
+  setInputValue('partnerNameInput', branding.partnerName || '');
+  setInputValue('primaryColorInput', branding.colors.primary);
+  setInputValue('primaryColorHex', branding.colors.primary);
+  setInputValue('secondaryColorInput', branding.colors.secondary);
+  setInputValue('secondaryColorHex', branding.colors.secondary);
+  setInputValue('footerColorInput', branding.colors.footer);
+  setInputValue('footerColorHex', branding.colors.footer);
+  setInputValue('logoUrlInput', branding.logo && !branding.logo.startsWith('data:') && !/^<\?xml|^<svg/i.test(branding.logo) ? branding.logo : '');
+  setInputValue('footerLogoUrlInput', branding.footerLogo && !branding.footerLogo.startsWith('data:') && !/^<\?xml|^<svg/i.test(branding.footerLogo) ? branding.footerLogo : '');
+  setInputValue('bannerUrlInput', branding.banner && !branding.banner.startsWith('data:') ? branding.banner : '');
+  setInputValue('loginBgUrlInput', branding.loginBackground && !branding.loginBackground.startsWith('data:') ? branding.loginBackground : '');
+
+  updateColor(colorVarMap.primary, branding.colors.primary);
+  updateColor(colorVarMap.secondary, branding.colors.secondary);
+  updateColor(colorVarMap.footer, branding.colors.footer);
+  updatePartnerName(branding.partnerName || DEFAULT_CONFIG.branding.partnerName);
+  updateLogo(branding.logo || '');
+  updateFooterLogo(branding.footerLogo || '');
+  updateBanner(branding.banner || '');
+  updateLoginBg(branding.loginBackground || '');
+  suspendAutoSave = false;
+}
+
+function applyRewardsConfig() {
+  const rewardsConfig = mergeConfig(DEFAULT_CONFIG.rewards, appConfig.rewards || {});
+  mockAgentPoints = Number(rewardsConfig.agentPoints) || 0;
+  mockRewardMinPoints = Number.isFinite(Number(rewardsConfig.rewardMinPoints)) ? Number(rewardsConfig.rewardMinPoints) : 0;
+  withholdingRatePct = Number.isFinite(Number(rewardsConfig.withholdingRatePct)) ? Number(rewardsConfig.withholdingRatePct) : 0;
+  refreshBalanceDisplay();
+}
+
 // --- Login (simulado) ---
 function openLogin() {
   document.getElementById('loginScreen').classList.add('open');
@@ -414,7 +672,7 @@ function simulateLogin() {
   document.getElementById('copyrightGuest').style.display = 'none';
   document.getElementById('copyrightLogged').style.display = '';
   window.scrollTo({ top: 0, behavior: 'smooth' });
-  fakeToast('Sesión iniciada (mockup) — bienvenida, Elena');
+  fakeToast(`Sesión iniciada (mockup) — bienvenida, ${appConfig.user.welcomeName}`);
 }
 function simulateLogout() {
   document.getElementById('userMenu').classList.remove('open');
@@ -432,9 +690,6 @@ function toggleUserMenu() {
 }
 
 // --- Rewards (solo visual, con simulación de canje) ---
-let mockAgentPoints = 1500;
-const mockRewardMinPoints = 1000;
-const withholdingRatePct = 0.02;
 
 function formatNumberEs(n) {
   return new Intl.NumberFormat('es-ES', { maximumFractionDigits: 0, useGrouping: true }).format(n);
@@ -716,113 +971,76 @@ function updateBanner(url) {
   }
   scheduleSave();
 }
-function resetDefaults() {
-  document.getElementById('primaryColorInput').value = '#0F6E6A';
-  document.getElementById('primaryColorHex').value = '#0F6E6A';
-  document.getElementById('secondaryColorInput').value = '#0B5652';
-  document.getElementById('secondaryColorHex').value = '#0B5652';
-  document.getElementById('footerColorInput').value = '#123832';
-  document.getElementById('footerColorHex').value = '#123832';
-  document.getElementById('logoUrlInput').value = '';
-  document.getElementById('footerLogoUrlInput').value = '';
-  document.getElementById('partnerNameInput').value = '';
-  document.getElementById('bannerUrlInput').value = '';
+async function resetDefaults() {
   document.getElementById('logoFileInput').value = '';
   document.getElementById('footerLogoFileInput').value = '';
   document.getElementById('bannerFileInput').value = '';
-  document.getElementById('loginBgUrlInput').value = '';
   document.getElementById('loginBgFileInput').value = '';
   document.getElementById('logoFileName').textContent = '';
   document.getElementById('footerLogoFileName').textContent = '';
   document.getElementById('bannerFileName').textContent = '';
   document.getElementById('loginBgFileName').textContent = '';
-  updateColor(colorVarMap.primary, '#0F6E6A');
-  updateColor(colorVarMap.secondary, '#0B5652');
-  updateColor(colorVarMap.footer, '#123832');
-  updateLogo('');
-  updateFooterLogo('');
-  updatePartnerName('');
-  updateBanner('');
-  updateLoginBg('');
-  binData.config = {};
-  saveBinData().catch(() => { });
-  fakeToast('Valores restablecidos para todo el mundo que abra este enlace');
+  if (!hasRemotePersistence()) {
+    applyBrandingConfig(appConfig.branding);
+    fakeToast('Configura la URL de npoint en config.json para poder guardar cambios compartidos');
+    return;
+  }
+  await savePersistedState({ branding: null });
+  applyBrandingConfig(appConfig.branding);
+  fakeToast('Valores restablecidos en npoint');
 }
 
-// --- Persistencia de la personalización (visible para cualquiera que abra este enlace) ---
+// --- Persistencia de la personalización (remota por npoint) ---
 let saveTimer;
 function scheduleSave() {
+  if (suspendAutoSave) return;
   clearTimeout(saveTimer);
-  saveTimer = setTimeout(saveConfigToStorage, 700);
+  saveTimer = setTimeout(() => { saveConfigToStorage(); }, 700);
+}
+function flushPendingSave() {
+  if (suspendAutoSave) return;
+  clearTimeout(saveTimer);
+  saveTimer = null;
+  void saveConfigToStorage();
 }
 async function saveConfigToStorage() {
   const cfg = {
     partnerName: document.getElementById('partnerNameInput').value || '',
-    primaryColor: document.getElementById('primaryColorHex').value || '',
-    secondaryColor: document.getElementById('secondaryColorHex').value || '',
-    footerColor: document.getElementById('footerColorHex').value || '',
+    colors: {
+      primary: document.getElementById('primaryColorHex').value || appConfig.branding?.colors?.primary || '',
+      secondary: document.getElementById('secondaryColorHex').value || appConfig.branding?.colors?.secondary || '',
+      footer: document.getElementById('footerColorHex').value || appConfig.branding?.colors?.footer || ''
+    },
     logo: currentLogoValue,
     footerLogo: currentFooterLogoValue,
     banner: currentBannerValue,
-    loginBg: currentLoginBgValue
+    loginBackground: currentLoginBgValue
   };
-  binData.config = cfg;
-  const ok = await saveBinData();
-  if (!ok) fakeToast('No se pudo guardar la personalización (revisa la conexión con npoint)');
-}
-async function loadConfigFromStorage() {
-  try {
-    await ensureBinLoaded();
-    const cfg = binData.config;
-    if (!cfg || Object.keys(cfg).length === 0) return;
-    if (cfg.partnerName) {
-      document.getElementById('partnerNameInput').value = cfg.partnerName;
-      updatePartnerName(cfg.partnerName);
-    }
-    if (cfg.primaryColor) {
-      document.getElementById('primaryColorInput').value = cfg.primaryColor;
-      document.getElementById('primaryColorHex').value = cfg.primaryColor;
-      updateColor(colorVarMap.primary, cfg.primaryColor);
-    }
-    if (cfg.secondaryColor) {
-      document.getElementById('secondaryColorInput').value = cfg.secondaryColor;
-      document.getElementById('secondaryColorHex').value = cfg.secondaryColor;
-      updateColor(colorVarMap.secondary, cfg.secondaryColor);
-    }
-    if (cfg.footerColor) {
-      document.getElementById('footerColorInput').value = cfg.footerColor;
-      document.getElementById('footerColorHex').value = cfg.footerColor;
-      updateColor(colorVarMap.footer, cfg.footerColor);
-    }
-    if (cfg.logo) {
-      if (!cfg.logo.startsWith('data:') && !/^<\?xml|^<svg/i.test(cfg.logo)) {
-        document.getElementById('logoUrlInput').value = cfg.logo;
-      }
-      updateLogo(cfg.logo);
-    }
-    if (cfg.footerLogo) {
-      if (!cfg.footerLogo.startsWith('data:') && !/^<\?xml|^<svg/i.test(cfg.footerLogo)) {
-        document.getElementById('footerLogoUrlInput').value = cfg.footerLogo;
-      }
-      updateFooterLogo(cfg.footerLogo);
-    }
-    if (cfg.banner) {
-      if (!cfg.banner.startsWith('data:')) document.getElementById('bannerUrlInput').value = cfg.banner;
-      updateBanner(cfg.banner);
-    }
-    if (cfg.loginBg) {
-      if (!cfg.loginBg.startsWith('data:')) document.getElementById('loginBgUrlInput').value = cfg.loginBg;
-      updateLoginBg(cfg.loginBg);
-    }
-  } catch (e) {
-    // sin personalización guardada todavía, o error de lectura: se queda con los valores por defecto
+
+  if (!hasRemotePersistence()) {
+    return;
+  }
+
+  const ok = await savePersistedState({ branding: cfg });
+  if (!ok) {
+    fakeToast('No se pudo guardar la personalización en npoint');
   }
 }
-loadConfigFromStorage();
+async function loadConfigFromStorage(state = null) {
+  const activeState = state || await loadPersistedState();
+  const storedBranding = activeState.branding;
+  const activeBranding = storedBranding && Object.keys(storedBranding).length > 0
+    ? mergeConfig(appConfig.branding, storedBranding)
+    : appConfig.branding;
 
-// año dinámico en el copyright del footer
-document.getElementById('footerYear').textContent = new Date().getFullYear();
-document.getElementById('footerYearLogged').textContent = new Date().getFullYear();
+  applyBrandingConfig(activeBranding);
+}
+
+function setFooterYears() {
+  const year = new Date().getFullYear();
+  document.getElementById('footerYear').textContent = year;
+  document.getElementById('footerYearLogged').textContent = year;
+}
 // --- Iconos SVG inline (sin depender de ningún CDN externo) ---
 const ICONS = {
   'pi-info-circle': '<circle cx="12" cy="12" r="9"/><line x1="12" y1="11" x2="12" y2="16.5"/><circle cx="12" cy="7.5" r="0.9" fill="currentColor" stroke="none"/>',
@@ -861,10 +1079,9 @@ function renderInlineIcons() {
     el.appendChild(svg);
   });
 }
-renderInlineIcons();
 
 // --- Catálogo de recompensas ---
-const CDN_CLUB = 'https://cdn.rewards.lastcalltour.com/production/';
+const CDN_CLUB = 'https://cdn.club.lastcalltour.com/production/';
 const CARD_LOGOS = {
   elCorteIngles: 'fd8b54cc-f14f-421c-86aa-074cff5688b0.png',
   moeve: 'c04f7b80-1b36-4f17-a774-10b54a6ad043.png',
@@ -945,7 +1162,7 @@ function renderCatalogGrid() {
   ).join('');
   grid.innerHTML = cardsHtml + `
       <li class="reward-card reward-card--all">
-        <a class="reward-link" href="https://cdn.rewards.lastcalltour.com/production/f55d15ea-0fa1-4180-b401-7d87e59bd7a9.pdf" target="_blank" rel="noopener noreferrer">
+        <a class="reward-link" href="https://cdn.club.lastcalltour.com/production/f55d15ea-0fa1-4180-b401-7d87e59bd7a9.pdf" target="_blank" rel="noopener noreferrer">
           <svg class="reward-pdf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
           <span class="reward-name">+50 comercios</span>
           <span class="reward-label">Y seguimos sumando</span>
@@ -960,12 +1177,25 @@ function selectCatalogCategory(id) {
   renderCatalogFilters();
   renderCatalogGrid();
 }
-renderCatalogFilters();
-renderCatalogGrid();
 
-updateProfileCompletion();
-renderRewardsPagination();
-applyBookingFilters();
+async function initializeApp() {
+  appConfig = await loadAppConfig();
+  storageConfig = mergeConfig(DEFAULT_CONFIG.storage, appConfig.storage || {});
+  const remoteState = await loadPersistedState();
+  appConfig = mergeRemoteStateIntoAppConfig(remoteState);
+  applyUserConfig();
+  applyRewardsConfig();
+  await loadConfigFromStorage(remoteState);
+  setFooterYears();
+  renderInlineIcons();
+  updateProfileCompletion();
+  renderCatalogFilters();
+  renderCatalogGrid();
+  renderRewardsPagination();
+  applyBookingFilters();
+}
+
+initializeApp();
 
 // cerrar modal al clicar fuera
 document.getElementById('loginScreen').addEventListener('click', (e) => {
