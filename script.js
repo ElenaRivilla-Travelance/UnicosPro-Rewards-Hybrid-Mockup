@@ -1081,7 +1081,7 @@ function renderInlineIcons() {
 }
 
 // --- Catálogo de recompensas ---
-const CDN_CLUB = 'https://cdn.club.lastcalltour.com/production/';
+const CDN_CLUB = 'https://cdn.rewards.lastcalltour.com/production/';
 const CARD_LOGOS = {
   elCorteIngles: 'fd8b54cc-f14f-421c-86aa-074cff5688b0.png',
   moeve: 'c04f7b80-1b36-4f17-a774-10b54a6ad043.png',
@@ -1162,7 +1162,7 @@ function renderCatalogGrid() {
   ).join('');
   grid.innerHTML = cardsHtml + `
       <li class="reward-card reward-card--all">
-        <a class="reward-link" href="https://cdn.club.lastcalltour.com/production/f55d15ea-0fa1-4180-b401-7d87e59bd7a9.pdf" target="_blank" rel="noopener noreferrer">
+        <a class="reward-link" href="https://cdn.rewards.lastcalltour.com/production/f55d15ea-0fa1-4180-b401-7d87e59bd7a9.pdf" target="_blank" rel="noopener noreferrer">
           <svg class="reward-pdf-icon" viewBox="0 0 24 24" aria-hidden="true"><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M10 9H8"/><path d="M16 13H8"/><path d="M16 17H8"/></svg>
           <span class="reward-name">+50 comercios</span>
           <span class="reward-label">Y seguimos sumando</span>
